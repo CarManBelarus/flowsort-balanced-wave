@@ -1,4 +1,4 @@
-# flowsort-balanced-wave (Сортировка треков Spotify)
+# flowsort-balanced-wave (Сортировка треков личных плейлистов Spotify)
 
 DJ-friendly tempo & key sorting tracks for Goofy / Spotify.
 
