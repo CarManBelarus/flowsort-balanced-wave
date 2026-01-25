@@ -66,6 +66,7 @@ let SWAP_LOOKAHEAD = Math.min(N, Math.max(2, Math.round(30 + 30 * Math.pow((N - 
 let MAX_PASSES = Math.max(1, Math.round(70 + 10 * Math.pow((N - MIN_TRACKS) / (MAX_TRACKS - MIN_TRACKS), 0.6)));
 let TWO_OPT_ITER = N > 2000 ? 1500 + Math.round((N - 2000) * 0.25) : Math.round(Math.sqrt(N) * 10);
 
+  
 // --- Защита для сверхмаленьких плейлистов (N < 5) ---
 if(N < 5){
     CHUNK_SIZE = N;
@@ -102,7 +103,13 @@ const CAM_SCENARIO_GRAPH = (() => {
         // параллельный лад (Am ↔ C и т.п.)
         const parallel     = num + (1 - sector) * 12;
 
-        map[pos] = [nextSameMode, prevSameMode, parallel];
+        
+const diagNext = ((num + 1) % 12) + (1 - sector) * 12;
+const diagPrev = ((num + 11) % 12) + (1 - sector) * 12;
+
+map[pos] = [nextSameMode, prevSameMode, parallel, diagNext, diagPrev]; 
+
+       
     }
     return map;
 })();
@@ -132,6 +139,8 @@ const CAM_SCENARIO_GRAPH = (() => {
     assignRanks(tracks,'_rawTempo','_nTempo');
     assignRanks(tracks,'_energy','_nEnergy');
     assignRanks(tracks,'_valence','_nMood');
+
+    
 
    
   // --- Camelot-индекс из Spotify key/mode ---
@@ -164,34 +173,27 @@ tracks.forEach(t => {
     } else {
         t._camelot = null;
     }
+    if (t._camelot != null) t._camelot = Math.max(0, Math.min(t._camelot, 23));
 });
 
-// 2-й проход: добиваем треки без ключа по соседям
-tracks.forEach((t, idx) => {
+
+
+
+
+// [MODIFIED] 2-й проход: Маркировка треков без тональности
+tracks.forEach((t) => {
+    // Если Camelot не определен (нет ключа), ставим флаг _isKeyless
     if (t._camelot == null) {
-        if (anyWithKey) {
-            const neighbors = [];
-            for (let i = idx - 2; i <= idx + 2; i++) {
-                if (i >= 0 && i < tracks.length) {
-                    const n = tracks[i];
-                    if (n && n._camelot != null) neighbors.push(n._camelot);
-                }
-            }
-            if (neighbors.length) {
-                const avg = neighbors.reduce((a,b)=>a+b,0)/neighbors.length;
-                t._camelot = Math.round(avg) % 24;
-            } else {
-                t._camelot = 12; // нейтральная точка
-            }
-        } else {
-            // вообще нет ключей — всем одно значение
-            t._camelot = 12;
-        }
+        t._isKeyless = true;
+        t._nKey = 0.5; // Техническое значение (середина), в расчетах участвовать не будет
+    } else {
+        t._isKeyless = false;
+        // Обычная нормализация
+        t._camelot = Math.max(0, Math.min(t._camelot, 23));
+        t._nKey = t._camelot / 24;
     }
-
-    // нормализованное значение 0–1, как у тебя и было
-    t._nKey = t._camelot / 24;
 });
+
 
     // --- Метрика близости ---
     const cache = new Map();
@@ -203,6 +205,10 @@ tracks.forEach((t, idx) => {
     
 
   const softDistance = (a,b)=>{
+
+    if (a._isKeyless && b._isKeyless) {
+    return 3000000;
+}
     if (!a || !b) return 1.0;
 
     // ЛОГ: один раз на запуск покажем, в каком режиме работаем
@@ -214,9 +220,30 @@ tracks.forEach((t, idx) => {
     const k = pairKey(a,b);
     if (cache.has(k)) return cache.get(k);
 
-    const dTempo  = Math.abs(a._nTempo - b._nTempo);
+    
+   let dTempo = Math.abs(a._nTempo - b._nTempo);
 
-    // --- твоя исходная логика Camelot ---
+if (a._rawTempo && b._rawTempo) {
+
+    const bpmA = a._rawTempo;
+    const bpmB = b._rawTempo;
+    const tol = 0.04;
+
+    const isDouble =
+        Math.abs(bpmA * 2 - bpmB) < bpmB * tol ||
+        Math.abs(bpmB * 2 - bpmA) < bpmA * tol;
+
+    const isHalf =
+        Math.abs(bpmA / 2 - bpmB) < bpmB * tol ||
+        Math.abs(bpmB / 2 - bpmA) < bpmA * tol;
+
+    if (isDouble || isHalf) {
+        dTempo = Math.min(dTempo, dTempo * 0.25);
+    }
+}
+    
+
+    // ---  исходная логика Camelot ---
     function camelotCompatible(posA, posB) {
         // тот же ключ → идеально
         if (posA === posB) return 0.0;
@@ -242,6 +269,9 @@ tracks.forEach((t, idx) => {
         // 2) Параллельный лад (8A ↔️ 8B)
         if (aNum === bNum && aSector !== bSector) return 0.12;
 
+        
+        if (!sameSector && diff12 === 1) return 0.18; // Диагональ (например, 1A -> 2B)
+
         // 3) Шаг через один номер по кругу в той же секции (4A → 6A, 5B → 7B)
         if (sameSector && diff12 === 2) return 0.22;
 
@@ -256,9 +286,12 @@ tracks.forEach((t, idx) => {
         const MIN_PENALTY = 0.18;  // мягкий минимум
         const MAX_PENALTY = 0.80;  // мягкий максимум
         const MAX_STEPS   = 12;
+       
 
         let penalty = MIN_PENALTY +
             (diff - 1) / (MAX_STEPS - 1) * (MAX_PENALTY - MIN_PENALTY);
+
+          
 
         // Тритон и дальше (примерно 6 шагов и >) слегка поджимаем
         if (diff >= 6) {
@@ -270,84 +303,104 @@ tracks.forEach((t, idx) => {
         return penalty;
     }
 
-    const aPos = (a._camelot != null ? a._camelot : Math.floor(a._nKey * 24));
-    const bPos = (b._camelot != null ? b._camelot : Math.floor(b._nKey * 24));
-    const dKey = camelotCompatible(aPos, bPos);
-    //
-    
-
+   // [MODIFIED] --- Расчет базовых разниц ---
     const dEnergy = Math.abs(a._nEnergy - b._nEnergy);
-    const dValence= Math.abs(a._nMood - b._nMood);
+    const dValence = Math.abs(a._nMood - b._nMood);
+    
+    let val = 0;
 
-    const weightHarmony = (a._key != null && b._key != null) ? WEIGHTS.harmony : 0.1;
+    
+// СЦЕНАРИЙ Б: Работа с пустышками (Интервал + Запрет соседства + Защита вектора)
+     if (a._isKeyless || b._isKeyless) {
+        
+        // 1. ЗАПРЕТ СОСЕДСТВА
+        // Если оба трека — пустышки, возвращаем "бесконечность".
+        // Это гарантирует, что между любыми двумя пустышками будет минимум один трек с ключом.
+       
 
+        const tA = a._nTempo || 0;
+        const tB = b._nTempo || 0;
 
-// базовая метрика — ЧИСТО по твоей логике
-    let val = Math.sqrt(
-        WEIGHTS.tempo   * Math.pow(dTempo,   2) +
-        weightHarmony   * Math.pow(dKey,     2) +
-        WEIGHTS.energy  * Math.pow(dEnergy,  2) +
-        WEIGHTS.valence * Math.pow(dValence,2)
-    );
+        // 2. БЕЗУСЛОВНЫЙ ИНТЕРВАЛ (Закон возрастания)
+        // Если темп падает (откат), возвращаем системный запрет.
+        // Это не даст 130 встать после 138, или 117 после 123.
+        if (tA > tB) {
+            return 2000000; 
+        }
 
-    // --- ГИБРИДНЫЙ слой: «плавное развитие» ---
-    if (USE_KEY_SCENARIOS) {
-        // Сценарный режим: плавное развитие сильно влияет ТОЛЬКО при близком темпе.
-        const exits = CAM_SCENARIO_GRAPH[aPos];
-        if (exits && exits.length) {
-            const isScenario = exits.includes(bPos);
+        const diff = tB - tA;
 
-            // dTempo здесь уже нормализован (0..1) как разница по рангу темпа
-            const TEMPO_CLOSE = 0.08; // темп почти совпадает
-            const TEMPO_MID   = 0.16; // зона умеренного влияния сценария
-
-            if (dTempo < TEMPO_CLOSE) {
-                // Темп почти одинаковый → даём максимальный приоритет плавному развитию.
-                if (isScenario) {
-                    // Сценарный сосед (±1 или параллель) получает сильный бонус.
-                    val *= 0.80;          // -20% к общей дистанции
-                } else if (dKey < 0.40) {
-                    // Гармонически близко, но не по сценарию — заметный штраф.
-                    val *= 1.05;          // +5% к общей дистанции
-                }
-            } else if (dTempo < TEMPO_MID) {
-                // Темп немного отличается → мягкий сценарный приоритет (как было раньше).
-                if (isScenario) {
-                    val *= 0.90;          // -10% к общей дистанции
-                } else if (dKey < 0.40) {
-                    val *= 1.03;          // +3% к общей дистанции
-                }
-            } else {
-                // dTempo >= TEMPO_MID → темп уже разошёлся.
-                // Здесь сценарий НЕ вмешивается, чтобы не ломать BPM.
+        if (diff < 0.005) {
+            val = 0.0001; // Идеальное совпадение темпа
+        } else {
+            // 3. ЭКСПОНЕНЦИАЛЬНЫЙ ШТРАФ ЗА ДИСТАНЦИЮ
+            // Используем Math.pow(diff, 2) * 1000. 
+            // Это заставит 160(-) "притягиваться" к 158, так как прыжок от 138 будет в 100 раз дороже.
+            val = Math.pow(diff, 2) * 1000 + (diff * 50);
+            
+            // 4. ШТРАФ ЗА ГИГАНТСКИЙ ПРЫЖОК
+            // Если разрыв больше ~5 BPM, ставим заградительный вес.
+            if (diff > 0.035) {
+                val += 1000;
             }
         }
-    } else {
-        // Режим "без сценария" с fallback в сложных местах:
-        // темп уже хороший, но по тональностям стало жестко —
-        // пробуем вытянуть за счёт сценарных переходов.
+        
+        // Умножаем на 5, чтобы любая связка через пустышку была "тяжелее" 
+        // самого плохого музыкального перехода.
+        val *= 5.0;
+    }
+    
+   
+    // СЦЕНАРИЙ В: Оба трека С ТОНАЛЬНОСТЬЮ (Стандартная логика + Сценарии)
+    else {
+        const aPos = (a._camelot != null ? a._camelot : Math.floor(a._nKey * 24));
+        const bPos = (b._camelot != null ? b._camelot : Math.floor(b._nKey * 24));
+        const dKey = camelotCompatible(aPos, bPos);
+        
+        const weightHarmony = WEIGHTS.harmony;
 
-        const exits = CAM_SCENARIO_GRAPH[aPos];
-        if (exits && exits.length) {
-            const isScenario = exits.includes(bPos);
+        val = Math.sqrt(
+            WEIGHTS.tempo   * Math.pow(dTempo,   2) +
+            weightHarmony   * Math.pow(dKey,     2) +
+            WEIGHTS.energy  * Math.pow(dEnergy,  2) +
+            WEIGHTS.valence * Math.pow(dValence, 2)
+        );
 
-            // пороги можно потом подкрутить
-            const TEMPO_SAFE  = 0.08; // dTempo: темп почти не меняем
-            const KEY_TROUBLE = 0.35; // 0.30 dKey: уже чувствительно далеко
+        // --- Логика сценариев (только для треков с ключами) ---
+        if (USE_KEY_SCENARIOS) {
+            const exits = CAM_SCENARIO_GRAPH[aPos];
+            if (exits && exits.length) {
+                const isScenario = exits.includes(bPos);
+                const TEMPO_CLOSE = 0.08;
+                const TEMPO_MID   = 0.16;
+                const isDiagonal = (aPos !== bPos) && 
+                                   (Math.min((aPos % 12 - bPos % 12 + 12) % 12, (bPos % 12 - aPos % 12 + 12) % 12) === 1) && 
+                                   (Math.floor(aPos / 12) !== Math.floor(bPos / 12));
 
-            // работаем ТОЛЬКО когда темп близкий, а ключ уже "плохой"
-            if (dTempo < TEMPO_SAFE && dKey > KEY_TROUBLE) {
                 if (isScenario) {
-                    // помогаем сценарию чуть сильнее проявиться
-                    val *= 0.90;   // такой же бонус, как в сценарном режиме
-                } else {
-                    // лёгкий штраф, чтобы при прочих равных выигрывал сценарный сосед
-                    val *= 1.02;
+                    if (dTempo < TEMPO_CLOSE) val *= 0.80;
+                    else if (dTempo < TEMPO_MID && !isDiagonal) val *= 0.90;
+                } else if (dKey < 0.40) {
+                    val *= (dTempo < TEMPO_CLOSE) ? 1.05 : 1.03;
+                }
+            }
+        } else {
+            // Fallback без сценариев
+            const exits = CAM_SCENARIO_GRAPH[aPos];
+            if (exits && exits.length) {
+                const isScenario = exits.includes(bPos);
+                const TEMPO_SAFE  = 0.08;
+                const KEY_TROUBLE = 0.35;
+                if (dTempo < TEMPO_SAFE && dKey > KEY_TROUBLE) {
+                    if (isScenario) val *= 0.90;
+                    else val *= 1.02;
                 }
             }
         }
     }
 
+
+   
 
     if (cache.size > CACHE_LIMIT) {
         let i = 0;
@@ -662,7 +715,10 @@ tracks.forEach((t, idx) => {
         }
     }
 
-// --- Финальный проход для улучшения соседства ---
+
+
+
+// --- Финальный проход (щадящий, контекстный, симметричный) ---
 
 function getFinalLook(N) {
     const minN = 4, maxN = 4500;
@@ -672,41 +728,148 @@ function getFinalLook(N) {
     return Math.max(4, Math.floor(N / div));
 }
 
-const finalLook = getFinalLook(N);
+let finalLook = Math.min(getFinalLook(N), 24);
 
-for (let pass = 0; pass < Math.min(10, MAX_PASSES); pass++) {
+// --- оценка качества текущего потока ---
+let avgDist = 0;
+for (let i = 1; i < stitched.length; i++) {
+    avgDist += softDistance(stitched[i - 1], stitched[i]);
+}
+avgDist /= Math.max(1, stitched.length - 1);
+
+// если поток уже хороший — резко ограничиваем зону вмешательства
+if (avgDist < 0.22) finalLook = Math.min(finalLook, 8);
+
+const MIN_DELTA = 0.03;
+const REL_GAIN  = 0.08;   // минимум 8% относительного выигрыша
+const GOOD_PAIR = 0.18;   // «здоровая» локальная зона — не трогать
+
+for (let pass = 0; pass < 2; pass++) {
     let improved = false;
+
     for (let i = 0; i < stitched.length - 1; i++) {
+
+        // --- защита локальной зоны вокруг i ---
+        const localCostI =
+            (stitched[i - 1] ? softDistance(stitched[i - 1], stitched[i]) : 0) +
+            (stitched[i + 1] ? softDistance(stitched[i], stitched[i + 1]) : 0);
+
+        if (localCostI < GOOD_PAIR) continue;
+
         for (let j = i + 1; j < Math.min(stitched.length, i + 1 + finalLook); j++) {
+
+            // --- защита локальной зоны вокруг j ---
+            const localCostJ =
+                (stitched[j - 1] ? softDistance(stitched[j - 1], stitched[j]) : 0) +
+                (stitched[j + 1] ? softDistance(stitched[j], stitched[j + 1]) : 0);
+
+            // Если один из треков в зоне перестановки — пустышка, мы ОБЯЗАНЫ делать расчет
+const isKeylessInvolved = stitched[i]._isKeyless || stitched[j]._isKeyless || 
+                          (stitched[i-1] && stitched[i-1]._isKeyless) ||
+                          (stitched[j+1] && stitched[j+1]._isKeyless);
+
+if (localCostJ < GOOD_PAIR && !isKeylessInvolved) continue;
+            
+            
+
+// 4. Даем пустышкам свободу перемещения, а обычные треки держим в узде
+const dTempoLocal = Math.abs(stitched[i]._nTempo - stitched[j]._nTempo);
+const isFarJump = (j - i) > 6;
+if (dTempoLocal < 0.05 && isFarJump && !isKeylessInvolved) continue;
+
+
             const temp = stitched.slice();
             [temp[i], temp[j]] = [temp[j], temp[i]];
 
-            const costBefore = pairCost(
-                stitched[i - 1] || null, stitched[i] || null,
-                stitched[j - 1] || null, stitched[j] || null
-            ) + pairCost(
-                stitched[i] || null, stitched[i + 1] || null,
-                stitched[j] || null, stitched[j + 1] || null
-            );
+            const costBefore =
+                pairCost(stitched[i - 1] || null, stitched[i] || null,
+                         stitched[j - 1] || null, stitched[j] || null) +
+                pairCost(stitched[i] || null, stitched[i + 1] || null,
+                         stitched[j] || null, stitched[j + 1] || null);
 
-            const costAfter = pairCost(
-                temp[i - 1] || null, temp[i] || null,
-                temp[j - 1] || null, temp[j] || null
-            ) + pairCost(
-                temp[i] || null, temp[i + 1] || null,
-                temp[j] || null, temp[j + 1] || null
-            );
+            const costAfter =
+                pairCost(temp[i - 1] || null, temp[i] || null,
+                         temp[j - 1] || null, temp[j] || null) +
+                pairCost(temp[i] || null, temp[i + 1] || null,
+                         temp[j] || null, temp[j + 1] || null);
 
-            if (costAfter < costBefore) {
+            const gain = costBefore - costAfter;
+
+            // --- встроенная защита от нуля и маленького costBefore ---
+            if (costBefore > 1e-6 &&
+                gain > MIN_DELTA &&
+                (gain / costBefore) > REL_GAIN) {
                 stitched = temp;
                 improved = true;
             }
         }
     }
+
     if (!improved) break;
+}
+// --- Усиленный контекстный пост-пасс для keyless треков ---
+// Цель: соблюсти MIN_GAP_KEYLESS, плавное встраивание по BPM, не ломать сценарий Б
+const MIN_GAP_KEYLESS = 2;    // минимум треков с ключом между пустышками
+const MAX_BPM_DIFF = 8;        // макс. допустимое отличие BPM для соседства
+const MAX_SHIFT = 6;           // максимальный сдвиг пустышки (только локально)
+
+for (let i = 0; i < stitched.length; i++) {
+    if (!stitched[i]._isKeyless) continue;
+
+    let lastKeylessIdx = i;
+
+    for (let j = i + 1; j < stitched.length; j++) {
+        if (!stitched[j]._isKeyless) continue;
+
+        const gap = j - lastKeylessIdx - 1;
+
+        if (gap < MIN_GAP_KEYLESS) {
+
+            // --- Собираем кандидатов для перемещения ---
+            let candidates = [];
+            for (let k = Math.max(lastKeylessIdx + 1, j - MAX_SHIFT); k <= Math.min(stitched.length - 1, j + MAX_SHIFT); k++) {
+                const cand = stitched[k];
+                if (!cand._isKeyless) {
+                    const tempoDiff = Math.abs((cand._rawTempo || 120) - (stitched[j]._rawTempo || 120));
+                    if (tempoDiff <= MAX_BPM_DIFF) {
+                        candidates.push({ idx: k, tempoDiff });
+                    }
+                }
+            }
+
+            if (candidates.length > 0) {
+                // --- Выбираем ближайшего по BPM, если несколько кандидатов, приоритет ближе к j ---
+                candidates.sort((a, b) => {
+                    const distA = Math.abs(a.idx - j);
+                    const distB = Math.abs(b.idx - j);
+                    return (distA + a.tempoDiff / 10) - (distB + b.tempoDiff / 10);
+                });
+
+                const targetIdx = candidates[0].idx;
+
+                // --- Переставляем пустышку ---
+                const tmp = stitched[j];
+                if (targetIdx > j) {
+                    for (let m = j; m < targetIdx; m++) stitched[m] = stitched[m + 1];
+                    stitched[targetIdx] = tmp;
+                } else if (targetIdx < j) {
+                    for (let m = j; m > targetIdx; m--) stitched[m] = stitched[m - 1];
+                    stitched[targetIdx] = tmp;
+                }
+
+                j = targetIdx; // обновляем индекс после перестановки
+            }
+
+        }
+
+        lastKeylessIdx = j;
+    }
 }
 
 console.log(`✅ sortBalancedWave итог: ${stitched.length} треков отсортировано`);
 
+
+
     return stitched;
 };
+
