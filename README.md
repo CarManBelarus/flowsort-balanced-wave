@@ -2,7 +2,7 @@
 
 DJ-friendly tempo & key sorting tracks for Goofy / Spotify.
 
-Этот скрипт реализует FlowSort.sortBalancedWave — сортировку треков с учётом темпа, тональностей (Camelot)
+Этот скрипт реализует FlowSort.sortBalancedWave — сортировку треков в личных плейлистах с учётом темпа, тональностей (Camelot)
 и базовых DJ-сценариев плавного развития переходов по тональностям в режиме (USE_KEY_SCENARIOS = true)
 
 Подходит для больших плейлистов (до 4000 треков) и
