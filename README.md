@@ -8,7 +8,7 @@ DJ-friendly tempo & key sorting tracks for Goofy / Spotify.
 Подходит для больших плейлистов (до 4000 треков) и
 используется в экосистеме Goofy / Google Apps Script для работы со Spotify.
 
-Для работы скрипта требуется премиум-подписка Spotify, настроенный с приватными ключами Goofy https://chimildic.github.io/goofy/#/ (к слову огромная благодарность автору проекта Goofy, без него ничего этого не было бы)
+Для работы скрипта требуется премиум-подписка Spotify, настроенный https://chimildic.github.io/goofy/#/install  с приватными ключами Goofy https://chimildic.github.io/goofy/#/ (к слову огромная благодарность автору проекта Goofy, без него ничего этого не было бы)
 
 Содержимое flowsort_sortBalancedWave.js нужно скопировать, сохранить в отдельный файл и передвинуть его повыше, следующим сразу после library.gs 
 
