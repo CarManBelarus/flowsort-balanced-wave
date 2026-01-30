@@ -31,7 +31,5 @@ DJ-friendly tempo & key sorting tracks for Goofy / Spotify.
  
  <img width="596" height="169" alt="Снимок экрана от 2026-01-25 15-41-40" src="https://github.com/user-attachments/assets/b00fb466-6b9e-42a5-b2b9-c5c36fe6e96d" />
 
-пример отсортированного разножанрового плейлиста (4000+ треков)
-https://open.spotify.com/playlist/6ITl9ClS4NpI05AYf5z8ed?si=UoCZXFQ5RGOj63exm5SZvQ&pi=7Z-wyDiMRMaSG (включить crossfade = 10 секунд)
 
 25.01.2026 .Обновил. Переработал подход к сортировке треков, не имеющих в фичах тональность. А также добавил парочку дополнительных приемов в сортировке треков по тональностям и темпу.
