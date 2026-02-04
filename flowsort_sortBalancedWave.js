@@ -1,3 +1,4 @@
+
 // FlowSort.sortBalancedWave — сортировка треков по темпу и тональностям (Camelot)
 
 var FlowSort = FlowSort || {};
@@ -80,6 +81,7 @@ if(N < 5){
 
     // --- Веса ---
     const DEFAULT_WEIGHTS = { tempo: 0.53, harmony: 0.45, energy: 0.01, valence: 0.01 };
+  //const DEFAULT_WEIGHTS = { tempo: 0.4, harmony: 0.3, energy: 0.2, valence: 0.1 };
     
     const WEIGHTS = Object.assign({}, DEFAULT_WEIGHTS, options.weights || {});
 
@@ -221,26 +223,25 @@ tracks.forEach((t) => {
     if (cache.has(k)) return cache.get(k);
 
     
-   let dTempo = Math.abs(a._nTempo - b._nTempo);
+   
+  let dTempo = Math.abs(a._nTempo - b._nTempo);
 
-if (a._rawTempo && b._rawTempo) {
+    if (a._rawTempo && b._rawTempo) {
+        const bpmA = a._rawTempo;
+        const bpmB = b._rawTempo;
+        const tol = 0.04; // 5% толерантность
 
-    const bpmA = a._rawTempo;
-    const bpmB = b._rawTempo;
-    const tol = 0.04;
+        const isDouble = Math.abs(bpmA * 2 - bpmB) < bpmB * tol || Math.abs(bpmB * 2 - bpmA) < bpmA * tol;
+        const isHalf = Math.abs(bpmA / 2 - bpmB) < bpmB * tol || Math.abs(bpmB / 2 - bpmA) < bpmA * tol;
 
-    const isDouble =
-        Math.abs(bpmA * 2 - bpmB) < bpmB * tol ||
-        Math.abs(bpmB * 2 - bpmA) < bpmA * tol;
-
-    const isHalf =
-        Math.abs(bpmA / 2 - bpmB) < bpmB * tol ||
-        Math.abs(bpmB / 2 - bpmA) < bpmA * tol;
-
-    if (isDouble || isHalf) {
-        dTempo = Math.min(dTempo, dTempo * 0.25);
+        if (isDouble || isHalf) {
+            // Ставим фиксированную "цену" как у соседнего трека (разница ~2 BPM)
+            // Умножение на 0.25 здесь не сработает, так как 1.0 * 0.25 = 0.25 (это много),
+            // а нам нужно получить около 0.018.
+            dTempo = 0.025; 
+        }
     }
-}
+
     
 
     // ---  исходная логика Camelot ---
@@ -310,46 +311,44 @@ if (a._rawTempo && b._rawTempo) {
     let val = 0;
 
     
-// СЦЕНАРИЙ Б: Работа с пустышками (Интервал + Запрет соседства + Защита вектора)
-     if (a._isKeyless || b._isKeyless) {
-        
-        // 1. ЗАПРЕТ СОСЕДСТВА
-        // Если оба трека — пустышки, возвращаем "бесконечность".
-        // Это гарантирует, что между любыми двумя пустышками будет минимум один трек с ключом.
-       
 
+    // СЦЕНАРИЙ Б: Работа с пустышками
+
+     if (a._isKeyless || b._isKeyless) {
         const tA = a._nTempo || 0;
         const tB = b._nTempo || 0;
+        const rawA = a._rawTempo || 120;
+        const rawB = b._rawTempo || 120;
+        const tol = 0.04; 
 
-        // 2. БЕЗУСЛОВНЫЙ ИНТЕРВАЛ (Закон возрастания)
-        // Если темп падает (откат), возвращаем системный запрет.
-        // Это не даст 130 встать после 138, или 117 после 123.
-        if (tA > tB) {
-            return 2000000; 
-        }
+        // 1. Сначала определяем, является ли это кратным переходом
+        const isPerfectDrop = Math.abs(rawA / 2 - rawB) < (rawB * tol); 
+        const isPerfectRise = Math.abs(rawA * 2 - rawB) < (rawB * tol);
 
-        const diff = tB - tA;
+        // 2. Считаем стоимость "соседнего шага"
+        const neighborStep = 0.025;
+        const neighborCost = Math.pow(neighborStep, 2) * 1000 + (neighborStep * 50);
 
-        if (diff < 0.005) {
-            val = 0.0001; // Идеальное совпадение темпа
-        } else {
-            // 3. ЭКСПОНЕНЦИАЛЬНЫЙ ШТРАФ ЗА ДИСТАНЦИЮ
-            // Используем Math.pow(diff, 2) * 1000. 
-            // Это заставит 160(-) "притягиваться" к 158, так как прыжок от 138 будет в 100 раз дороже.
-            val = Math.pow(diff, 2) * 1000 + (diff * 50);
-            
-            // 4. ШТРАФ ЗА ГИГАНТСКИЙ ПРЫЖОК
-            // Если разрыв больше ~5 BPM, ставим заградительный вес.
-            if (diff > 0.035) {
-                val += 1000;
+        if (isPerfectDrop || isPerfectRise) {
+            // Если кратно — разрешаем и даем малый вес
+            val = neighborCost;
+        } 
+        else if (tA > tB) {
+            // Если просто падает (и не кратно) — запрещаем
+            return 2000000;
+        } 
+        else {
+            // Обычный рост темпа
+            const diff = Math.abs(tB - tA);
+            if (diff < 0.005) {
+                val = 0.0001;
+            } else {
+                val = Math.pow(diff, 2) * 1000 + (diff * 50);
+                if (diff > 0.035) val += 1000;
             }
         }
-        
-        // Умножаем на 5, чтобы любая связка через пустышку была "тяжелее" 
-        // самого плохого музыкального перехода.
-        val *= 5.0;
+        val *= 5.0; 
     }
-    
    
     // СЦЕНАРИЙ В: Оба трека С ТОНАЛЬНОСТЬЮ (Стандартная логика + Сценарии)
     else {
@@ -872,4 +871,3 @@ console.log(`✅ sortBalancedWave итог: ${stitched.length} треков от
 
     return stitched;
 };
-
